@@ -12,6 +12,13 @@ from pynput import keyboard, mouse
 from pynput.keyboard import Key, KeyCode
 from pynput.mouse import Button
 
+try:
+    from PIL import Image, ImageDraw
+    import pystray
+    _HAS_TRAY = True
+except ImportError:
+    _HAS_TRAY = False
+
 # ── Embedded protocol ──────────────────────────────────────────────────
 
 PORT = 47984
@@ -84,6 +91,32 @@ def _notify(title, message):
         try: ctypes.windll.user32.MessageBeep(0x40)
         except Exception: pass
 
+
+def _create_mouse_icon(size=64):
+    """Generate a mouse-cursor icon image (PIL Image)."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    # Draw a simple mouse/pointer shape
+    s = size
+    # Mouse body (oval)
+    body_x0, body_y0 = int(s*0.2), int(s*0.15)
+    body_x1, body_y1 = int(s*0.8), int(s*0.85)
+    d.rounded_rectangle([body_x0, body_y0, body_x1, body_y1], radius=int(s*0.25),
+                        fill=(50, 50, 50, 255), outline=(200, 200, 200, 255), width=2)
+    # Center line
+    cx = s // 2
+    d.line([(cx, body_y0 + int(s*0.08)), (cx, int(s*0.5))],
+           fill=(200, 200, 200, 255), width=2)
+    # Horizontal divider
+    d.line([(body_x0 + 4, int(s*0.5)), (body_x1 - 4, int(s*0.5))],
+           fill=(200, 200, 200, 255), width=2)
+    # Scroll wheel
+    wheel_y = int(s * 0.35)
+    d.ellipse([cx-3, wheel_y-5, cx+3, wheel_y+5],
+              fill=(100, 180, 255, 255), outline=(200, 200, 200, 255))
+    return img
+
+
 # ── App ─────────────────────────────────────────────────────────────────
 
 class ServerApp:
@@ -115,13 +148,40 @@ class ServerApp:
         self._device_name = socket.gethostname()
         self._cursor_hidden = False
         self._saved_pos = None          # saved cursor pos before forwarding
+        self._current_ip = _local_ip()
+        self._tray_icon = None
+        self._quitting = False
 
         u = ctypes.windll.user32
         self.SW, self.SH = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
         self.CX, self.CY = self.SW // 2, self.SH // 2
 
+        # Set window icon
+        self._set_window_icon()
+
         self._build_ui()
         self._tick()
+        self._refresh_ip()          # periodic IP check
+
+    def _set_window_icon(self):
+        """Set the window icon to our mouse icon."""
+        if not _HAS_TRAY:
+            return
+        try:
+            icon_img = _create_mouse_icon(32)
+            # Convert PIL image to tkinter PhotoImage via temporary .ico
+            import tempfile
+            ico_path = os.path.join(tempfile.gettempdir(), "mouseshare_icon.ico")
+            # Save as ICO with multiple sizes
+            icon_img_16 = icon_img.resize((16, 16), Image.LANCZOS)
+            icon_img_32 = icon_img.resize((32, 32), Image.LANCZOS)
+            icon_img_48 = icon_img.resize((48, 48), Image.LANCZOS)
+            icon_img_32.save(ico_path, format="ICO",
+                           sizes=[(16,16), (32,32), (48,48)],
+                           append_images=[icon_img_16, icon_img_48])
+            self.root.iconbitmap(ico_path)
+        except Exception:
+            pass
 
     # ── UI ──────────────────────────────────────────────────────────────
 
@@ -155,13 +215,13 @@ class ServerApp:
         self._portE = ttk.Entry(c, textvariable=self._port, width=8)
         self._portE.grid(row=1, column=1, sticky="w", padx=(10,0), pady=3)
 
-        # local IP
-        ip = _local_ip()
+        # local IP (dynamic label)
         f = ttk.Frame(m); f.pack(fill="x", pady=(10,0))
         ttk.Label(f, text="Your IP:", font=("Segoe UI", 9)).pack(side="left")
-        ttk.Label(f, text=f"  {ip}", font=("Segoe UI", 11, "bold"),
-                  foreground="#1565C0").pack(side="left")
-        ttk.Label(f, text="  (enter on Ubuntu client)",
+        self._ipLabel = ttk.Label(f, text=f"  {self._current_ip}",
+                                  font=("Segoe UI", 11, "bold"), foreground="#1565C0")
+        self._ipLabel.pack(side="left")
+        ttk.Label(f, text="  (auto-detected)",
                   font=("Segoe UI", 8), foreground="#888").pack(side="left")
 
         # start / stop
@@ -174,7 +234,7 @@ class ServerApp:
         sf = ttk.LabelFrame(m, text="Status", padding=10); sf.pack(fill="x")
         for label_text, attr, default, sty in [
             ("Connection:", "_connL", "Stopped",          "R.TLabel"),
-            ("Mode:",       "_modeL", "—",                "S.TLabel"),
+            ("Mode:",       "_modeL", "—",           "S.TLabel"),
             ("Hotkey:",     "_hkL",   "Ctrl + Alt + S",   "S.TLabel"),
         ]:
             r = ttk.Frame(sf); r.pack(fill="x", pady=2)
@@ -203,7 +263,7 @@ class ServerApp:
         ttk.Label(m, text=f"Advertised as: {self._device_name}", style="S.TLabel").pack(anchor="w", pady=(10,0))
 
     def _tick(self):
-        """Poll the queue for thread→GUI updates (runs every 80 ms)."""
+        """Poll the queue for thread->GUI updates (runs every 80 ms)."""
         while True:
             try:
                 kind, val = self._q.get_nowait()
@@ -228,6 +288,8 @@ class ServerApp:
                     self.root.title("Mouse Share — Server")
             elif kind == "file_status":
                 self._fileStatus.config(text=val)
+            elif kind == "ip_changed":
+                self._ipLabel.config(text=f"  {val}")
         self.root.after(80, self._tick)
 
     def _append_log(self, msg):
@@ -236,6 +298,64 @@ class ServerApp:
     def _ui(self, kind, val):
         """Thread-safe GUI update."""
         self._q.put((kind, val))
+
+    # ── IP auto-refresh ─────────────────────────────────────────────────
+
+    def _refresh_ip(self):
+        """Check IP every 5 seconds and update if changed."""
+        new_ip = _local_ip()
+        if new_ip != self._current_ip:
+            self._current_ip = new_ip
+            self._ui("ip_changed", new_ip)
+        self.root.after(5000, self._refresh_ip)
+
+    # ── system tray ─────────────────────────────────────────────────────
+
+    def _setup_tray(self):
+        """Create system tray icon (call once)."""
+        if not _HAS_TRAY:
+            return
+        icon_img = _create_mouse_icon(64)
+        menu = pystray.Menu(
+            pystray.MenuItem("Show", self._tray_show, default=True),
+            pystray.MenuItem("Quit", self._tray_quit),
+        )
+        self._tray_icon = pystray.Icon("MouseShare", icon_img, "Mouse Share", menu)
+        threading.Thread(target=self._tray_icon.run, daemon=True).start()
+
+    def _tray_show(self, icon=None, item=None):
+        """Restore window from tray."""
+        self.root.after(0, self._do_show)
+
+    def _do_show(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _tray_quit(self, icon=None, item=None):
+        """Quit from tray menu."""
+        self._quitting = True
+        if self._tray_icon:
+            self._tray_icon.stop()
+        self.root.after(0, self._do_quit)
+
+    def _do_quit(self):
+        self._stop_server()
+        self.root.destroy()
+
+    def _on_close(self):
+        """Minimize to system tray instead of quitting."""
+        if _HAS_TRAY and not self._quitting:
+            self.root.withdraw()
+            # Setup tray on first minimize
+            if not self._tray_icon:
+                self._setup_tray()
+        else:
+            self._stop_server()
+            if self._tray_icon:
+                try: self._tray_icon.stop()
+                except Exception: pass
+            self.root.destroy()
 
     # ── start / stop ────────────────────────────────────────────────────
 
@@ -310,10 +430,6 @@ class ServerApp:
         self._ui("mode", "normal")
         self._ui("log", "Server stopped")
 
-    def _on_close(self):
-        self._stop_server()
-        self.root.destroy()
-
     # ── networking ──────────────────────────────────────────────────────
 
     def _send(self, m):
@@ -360,17 +476,18 @@ class ServerApp:
                 next_mouse_flush = now + 0.006
 
     def _discovery_loop(self, port):
-        msg = json.dumps({
-            "app": APP_ID,
-            "role": "server",
-            "name": self._device_name,
-            "port": port,
-        }).encode("utf-8")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             while not self._discovery_stop.is_set():
+                # Build message fresh each time so IP changes are picked up
+                msg = json.dumps({
+                    "app": APP_ID,
+                    "role": "server",
+                    "name": self._device_name,
+                    "port": port,
+                }).encode("utf-8")
                 try:
                     sock.sendto(msg, ("255.255.255.255", DISCOVERY_PORT))
                 except OSError:
@@ -531,7 +648,7 @@ class ServerApp:
     #
     # Keyboard: suppress=True  (keys only go to Ubuntu)
     # Mouse:    suppress=True + center-and-snap
-    #   → local mouse events are consumed, we compute delta from screen centre,
+    #   -> local mouse events are consumed, we compute delta from screen centre,
     #     send it, then snap the cursor back to centre.  The snap
     #     generates a synthetic move with dx=dy=0 which we skip.
 
@@ -561,9 +678,7 @@ class ServerApp:
     def _fmS(self, x, y, dx, dy):
         self._send({"t":"ms","dx":dx,"dy":dy})
 
-    # ── run ─────────────────────────────────────────────────────────────
-
-    # file sharing ---------------------------------------------------------
+    # ── file sharing ────────────────────────────────────────────────────
 
     def _pick_file(self):
         path = filedialog.askopenfilename(title="Choose a file to send")

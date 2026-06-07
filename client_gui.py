@@ -323,6 +323,8 @@ class ClientApp:
         self.vx = 0                     # virtual cursor x (for edge detection)
         self.vy = 0                     # virtual cursor y
         self.injector: Injector | None = None
+        self._conn_target_host = ""
+        self._new_discovery = None
 
         self.SW, self.SH = _screen_size()
         self._build_ui()
@@ -564,6 +566,8 @@ class ClientApp:
 
         self._stop.clear()
         self._connecting = True
+        self._conn_target_host = host
+        self._new_discovery = None
         threading.Thread(target=self._sender_loop, daemon=True).start()
         self._btnVar.set("Disconnect")
         self._host.set(host)
@@ -621,7 +625,14 @@ class ClientApp:
                 trusted_name = self._trusted.get("name")
                 if trusted_name and trusted_name != name:
                     continue
-                if self.connected or self._connecting:
+                # If already connected to this same IP, nothing to do
+                if self.connected:
+                    continue
+                # If reconnecting to old IP but server is now at new IP,
+                # signal the conn_loop to switch target
+                if self._connecting:
+                    if addr[0] != self._conn_target_host:
+                        self._new_discovery = (addr[0], port, name)
                     continue
                 self._ui("auto_status", f"Found {name}; auto-connecting")
                 self._ui("auto_connect", (addr[0], port, name))
@@ -641,6 +652,7 @@ class ClientApp:
                 self.sock = sock
                 self.connected = True
                 self._connecting = False
+                self._new_discovery = None
                 self._trusted = {"name": trusted_name or host, "host": host, "port": port}
                 self._config["trusted_server"] = self._trusted
                 _save_config(self._config)
@@ -669,10 +681,27 @@ class ClientApp:
                 try: sock.close()
                 except Exception: pass
             self.sock = None; self.connected = False
-            self._connecting = False
+            self._connecting = True   # keep True so we stay in this loop
 
+            # Check if discovery found the server at a NEW IP
+            nd = self._new_discovery
+            if nd:
+                self._new_discovery = None
+                host, port, trusted_name = nd
+                self._conn_target_host = host
+                self._ui("auto_status", f"Server moved to {host}; reconnecting")
+                continue   # retry immediately with new IP
+
+            # Wait 3 seconds before retrying, but check for new discovery
             for _ in range(30):
                 if self._stop.is_set(): return
+                nd = self._new_discovery
+                if nd:
+                    self._new_discovery = None
+                    host, port, trusted_name = nd
+                    self._conn_target_host = host
+                    self._ui("auto_status", f"Server moved to {host}; reconnecting")
+                    break
                 time.sleep(0.1)
 
     def _send(self, m):
