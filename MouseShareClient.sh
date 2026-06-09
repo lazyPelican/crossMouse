@@ -10,8 +10,10 @@
 #  After that just double-click "Mouse Share" on your desktop.
 # ====================================================================
 
-set -e
 SELF="$(readlink -f "$0")"
+
+# Ensure common paths are available (desktop launches may have minimal PATH)
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:$PATH"
 
 # -- Re-launch inside a terminal if double-clicked from file manager --
 NEED_SETUP=0
@@ -21,7 +23,7 @@ python3 -c "import tkinter, evdev" 2>/dev/null || NEED_SETUP=1
 if [ "$NEED_SETUP" = "1" ] && [ ! -t 0 ] && [ -z "$MOUSESHARE_RELAUNCHED" ]; then
     export MOUSESHARE_RELAUNCHED=1
     for term in gnome-terminal x-terminal-emulator konsole xfce4-terminal lxterminal mate-terminal xterm; do
-        if command -v "$term" &>/dev/null; then
+        if command -v "$term" >/dev/null 2>&1; then
             case "$term" in
                 gnome-terminal) exec gnome-terminal -- bash "$SELF" ;;
                 *)              exec "$term" -e bash "$SELF" ;;
@@ -80,53 +82,43 @@ if [ "$NEED_SETUP" = "1" ]; then
     echo "  Setup complete!"
 fi
 
-# -- Create desktop shortcut (once) --
+# -- Create/update desktop shortcut --
+ESCAPED_SELF=$(echo "$SELF" | sed 's/ /\\ /g')
 DESKTOP_FILE="$HOME/Desktop/MouseShareClient.desktop"
-if [ ! -f "$DESKTOP_FILE" ]; then
-    mkdir -p "$HOME/Desktop"
-    cat > "$DESKTOP_FILE" << DEOF
+mkdir -p "$HOME/Desktop"
+cat > "$DESKTOP_FILE" << DEOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Mouse Share
 Comment=Share keyboard and mouse from Windows to this PC
-Exec=bash "$SELF"
+Exec=/bin/bash ${ESCAPED_SELF}
 Icon=input-mouse
 Terminal=false
 Categories=Utility;
 DEOF
-    chmod +x "$DESKTOP_FILE"
-    # Trust the desktop file (GNOME 42+)
-    gio set "$DESKTOP_FILE" metadata::trusted true 2>/dev/null || true
-    echo ""
-    echo "  ** Desktop shortcut created! **"
-    echo "  Double-click 'Mouse Share' on your desktop next time."
-    echo ""
-fi
+chmod +x "$DESKTOP_FILE"
+# Trust the desktop file (GNOME 42+)
+gio set "$DESKTOP_FILE" metadata::trusted true 2>/dev/null || true
 
-# -- Auto-start on login (once) --
+# -- Auto-start on login --
 AUTOSTART_DIR="$HOME/.config/autostart"
 AUTOSTART_FILE="$AUTOSTART_DIR/MouseShareClient.desktop"
-if [ ! -f "$AUTOSTART_FILE" ]; then
-    mkdir -p "$AUTOSTART_DIR"
-    cat > "$AUTOSTART_FILE" << AEOF
+mkdir -p "$AUTOSTART_DIR"
+cat > "$AUTOSTART_FILE" << AEOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Mouse Share
 Comment=Auto-start Mouse Share client on login
-Exec=bash "$SELF"
+Exec=/bin/bash ${ESCAPED_SELF}
 Icon=input-mouse
 Terminal=false
 Categories=Utility;
 X-GNOME-Autostart-enabled=true
 X-GNOME-Autostart-Delay=5
 AEOF
-    chmod +x "$AUTOSTART_FILE"
-    echo "  ** Auto-start enabled! **"
-    echo "  Mouse Share will launch automatically when you log in."
-    echo ""
-fi
+chmod +x "$AUTOSTART_FILE"
 
 # -- Write embedded Python to temp file and run it --
 PYFILE=$(mktemp /tmp/mouseshare_client_XXXXXX.py)
