@@ -162,6 +162,8 @@ class ServerApp:
         self._build_ui()
         self._tick()
         self._refresh_ip()          # periodic IP check
+        self._add_to_startup()       # ensure we launch on Windows boot
+        self.root.after(500, self._start_server)  # auto-start server
 
     def _icon_path(self):
         """Locate mouse_share.ico (works from source dir and PyInstaller bundle)."""
@@ -309,6 +311,27 @@ class ServerApp:
     def _ui(self, kind, val):
         """Thread-safe GUI update."""
         self._q.put((kind, val))
+
+    # ── Windows startup ─────────────────────────────────────────────────
+
+    def _add_to_startup(self):
+        """Add this exe to Windows startup so it launches on boot."""
+        try:
+            import winreg
+            # Get the path to the running executable
+            if getattr(sys, "frozen", False):
+                exe_path = sys.executable  # PyInstaller .exe
+            else:
+                exe_path = f'"{sys.executable}" "{os.path.abspath(__file__)}"'
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0, winreg.KEY_SET_VALUE,
+            )
+            winreg.SetValueEx(key, "MouseShareServer", 0, winreg.REG_SZ, exe_path)
+            winreg.CloseKey(key)
+        except Exception:
+            pass
 
     # ── IP auto-refresh ─────────────────────────────────────────────────
 

@@ -577,7 +577,7 @@ class ClientApp:
             elif kind == "auto_connect":
                 host, port, name = val
                 if not self.connected and not self._connecting:
-                    self._start_connect(host, port, name)
+                    self._start_connect(host, port, name, silent=True)
         self.root.after(80, self._tick)
 
     # -- periodic real-cursor edge check (GUI thread) --
@@ -614,34 +614,38 @@ class ClientApp:
         else:
             self._start_connect()
 
-    def _start_connect(self, host=None, port=None, trusted_name=None):
+    def _start_connect(self, host=None, port=None, trusted_name=None, silent=False):
         host = (host or self._host.get()).strip()
         if not host:
-            messagebox.showerror("Missing IP", "Enter the Windows server IP address, or start the Windows server for auto-connect.")
+            if not silent:
+                messagebox.showerror("Missing IP", "Enter the Windows server IP address, or start the Windows server for auto-connect.")
             return
         try:
             port = int(port or self._port.get())
             if not 1024 <= port <= 65535: raise ValueError
         except ValueError:
-            messagebox.showerror("Invalid port", "Port must be 1024-65535.")
+            if not silent:
+                messagebox.showerror("Invalid port", "Port must be 1024-65535.")
             return
 
         if _EVDEV_IMPORT_ERROR is not None:
-            messagebox.showerror(
-                "Missing dependency",
-                "The Linux 'evdev' package is required.\n\n"
-                "Install it with:\n"
-                "  python3 -m pip install evdev\n\n"
-                "Then restart Mouse Share Client.")
+            if not silent:
+                messagebox.showerror(
+                    "Missing dependency",
+                    "The Linux 'evdev' package is required.\n\n"
+                    "Install it with:\n"
+                    "  python3 -m pip install evdev\n\n"
+                    "Then restart Mouse Share Client.")
             return
 
         if not _can_uinput():
-            messagebox.showerror(
-                "Permission needed",
-                "Cannot write to /dev/uinput.\n\n"
-                "Run once in a terminal:\n"
-                "  sudo chmod 666 /dev/uinput\n\n"
-                "Then click Connect again.")
+            if not silent:
+                messagebox.showerror(
+                    "Permission needed",
+                    "Cannot write to /dev/uinput.\n\n"
+                    "Run once in a terminal:\n"
+                    "  sudo chmod 666 /dev/uinput\n\n"
+                    "Then click Connect again.")
             return
 
         if not self.injector:
@@ -649,7 +653,8 @@ class ClientApp:
                 self.injector = Injector(self.SW, self.SH)
                 self._ui("perm_ok", True)
             except Exception as e:
-                messagebox.showerror("uinput error", f"Cannot create virtual devices:\n{e}")
+                if not silent:
+                    messagebox.showerror("uinput error", f"Cannot create virtual devices:\n{e}")
                 return
 
         self._stop.clear()
