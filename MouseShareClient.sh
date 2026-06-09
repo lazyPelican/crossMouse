@@ -713,9 +713,6 @@ class ClientApp:
                     continue
                 name = msg.get("name") or addr[0]
                 port = int(msg.get("port") or PORT)
-                trusted_name = self._trusted.get("name")
-                if trusted_name and trusted_name != name:
-                    continue
                 # If already connected to this same IP, nothing to do
                 if self.connected:
                     continue
