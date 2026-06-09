@@ -82,36 +82,50 @@ if [ "$NEED_SETUP" = "1" ]; then
     echo "  Setup complete!"
 fi
 
-# -- Create/update desktop shortcut --
-ESCAPED_SELF=$(echo "$SELF" | sed 's/ /\\ /g')
-DESKTOP_FILE="$HOME/Desktop/MouseShareClient.desktop"
-mkdir -p "$HOME/Desktop"
-cat > "$DESKTOP_FILE" << DEOF
+# -- Build the Exec line (full path to bash + script) --
+EXEC_LINE="/bin/bash $SELF"
+
+# -- Install to applications menu (always trusted, no GNOME allow-launch needed) --
+APP_DIR="$HOME/.local/share/applications"
+APP_FILE="$APP_DIR/mouseshare-client.desktop"
+mkdir -p "$APP_DIR"
+cat > "$APP_FILE" << APPEOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Mouse Share
 Comment=Share keyboard and mouse from Windows to this PC
-Exec=/bin/bash ${ESCAPED_SELF}
+Exec=${EXEC_LINE}
 Icon=input-mouse
 Terminal=false
 Categories=Utility;
-DEOF
-chmod +x "$DESKTOP_FILE"
-# Trust the desktop file (GNOME 42+)
-gio set "$DESKTOP_FILE" metadata::trusted true 2>/dev/null || true
+APPEOF
+chmod +x "$APP_FILE"
+
+# -- Desktop shortcut (symlink to the app entry — stays trusted) --
+DESKTOP_FILE="$HOME/Desktop/mouseshare-client.desktop"
+if [ -d "$HOME/Desktop" ]; then
+    # Remove old broken shortcut if present
+    rm -f "$HOME/Desktop/MouseShareClient.desktop" 2>/dev/null || true
+    # Copy (not symlink — GNOME doesn't always trust symlinks on Desktop)
+    cp "$APP_FILE" "$DESKTOP_FILE" 2>/dev/null || true
+    chmod +x "$DESKTOP_FILE" 2>/dev/null || true
+    gio set "$DESKTOP_FILE" metadata::trusted true 2>/dev/null || true
+fi
 
 # -- Auto-start on login --
 AUTOSTART_DIR="$HOME/.config/autostart"
-AUTOSTART_FILE="$AUTOSTART_DIR/MouseShareClient.desktop"
+AUTOSTART_FILE="$AUTOSTART_DIR/mouseshare-client.desktop"
 mkdir -p "$AUTOSTART_DIR"
+# Remove old file
+rm -f "$AUTOSTART_DIR/MouseShareClient.desktop" 2>/dev/null || true
 cat > "$AUTOSTART_FILE" << AEOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Mouse Share
 Comment=Auto-start Mouse Share client on login
-Exec=/bin/bash ${ESCAPED_SELF}
+Exec=${EXEC_LINE}
 Icon=input-mouse
 Terminal=false
 Categories=Utility;
@@ -121,6 +135,7 @@ AEOF
 chmod +x "$AUTOSTART_FILE"
 
 # -- Write embedded Python to temp file and run it --
+LOGFILE="$HOME/.mouseshare_launch.log"
 PYFILE=$(mktemp /tmp/mouseshare_client_XXXXXX.py)
 trap 'rm -f "$PYFILE"' EXIT
 
@@ -983,4 +998,5 @@ if __name__ == "__main__":
     ClientApp().run()
 ___MOUSESHARE_PY___
 
-python3 "$PYFILE"
+echo "[$(date)] Launching Mouse Share Client..." >> "$LOGFILE"
+python3 "$PYFILE" 2>> "$LOGFILE" || echo "[$(date)] Exit code: $?" >> "$LOGFILE"
