@@ -7,7 +7,10 @@ echo [1/2] Installing dependencies ...
 pip install pyinstaller pynput pystray Pillow
 echo.
 echo [2/2] Building executable ...
+python generate_icon.py
 pyinstaller --onefile --windowed --name "MouseShareServer" ^
+    --icon=mouse_share.ico ^
+    --add-data "mouse_share.ico;." ^
     --hidden-import=pynput.keyboard._win32 ^
     --hidden-import=pynput.mouse._win32 ^
     --hidden-import=pystray._win32 ^

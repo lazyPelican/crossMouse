@@ -163,22 +163,33 @@ class ServerApp:
         self._tick()
         self._refresh_ip()          # periodic IP check
 
+    def _icon_path(self):
+        """Locate mouse_share.ico (works from source dir and PyInstaller bundle)."""
+        # PyInstaller puts bundled files in sys._MEIPASS
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base, "mouse_share.ico")
+
     def _set_window_icon(self):
         """Set the window icon to our mouse icon."""
+        try:
+            ico = self._icon_path()
+            if os.path.isfile(ico):
+                self.root.iconbitmap(ico)
+                return
+        except Exception:
+            pass
+        # Fallback: generate on the fly if .ico not bundled
         if not _HAS_TRAY:
             return
         try:
             icon_img = _create_mouse_icon(32)
-            # Convert PIL image to tkinter PhotoImage via temporary .ico
             import tempfile
             ico_path = os.path.join(tempfile.gettempdir(), "mouseshare_icon.ico")
-            # Save as ICO with multiple sizes
             icon_img_16 = icon_img.resize((16, 16), Image.LANCZOS)
-            icon_img_32 = icon_img.resize((32, 32), Image.LANCZOS)
             icon_img_48 = icon_img.resize((48, 48), Image.LANCZOS)
-            icon_img_32.save(ico_path, format="ICO",
-                           sizes=[(16,16), (32,32), (48,48)],
-                           append_images=[icon_img_16, icon_img_48])
+            icon_img.save(ico_path, format="ICO",
+                          sizes=[(16,16), (32,32), (48,48)],
+                          append_images=[icon_img_16, icon_img_48])
             self.root.iconbitmap(ico_path)
         except Exception:
             pass
